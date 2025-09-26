@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Viewer Page</title>
+    <style>body{font-family:sans-serif;background-color:#e8f4f8;text-align:center}video{border:2px solid #333;background-color:#000;width:80%;max-width:640px;margin-top:20px}#status{margin-top:20px;font-style:italic;color:#555}</style>
+</head>
+<body>
+    <h1>Live Stream Viewer</h1>
+    <video id="remoteVideo" autoplay playsinline></video>
+    <div id="status">Status: Waiting for stream...</div>
+    <script>
+        const remoteVideo=document.getElementById("remoteVideo"),statusDiv=document.getElementById("status");let peerConnection;const ws=new WebSocket(`wss://${window.location.host}`);const configuration={iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]};ws.onopen=()=>{console.log("Connected to signaling server"),statusDiv.textContent="Status: Connected to server. Waiting for streamer..."};ws.onmessage=async e=>{const t=JSON.parse(e.data);if(t.offer){statusDiv.textContent="Status: Receiving stream...";peerConnection=new RTCSessionDescription(configuration);peerConnection.ontrack=e=>{remoteVideo.srcObject=e.streams[0]};peerConnection.onicecandidate=e=>{e.candidate&&ws.send(JSON.stringify({candidate:e.candidate}))};await peerConnection.setRemoteDescription(new RTCSessionDescription(t.offer));const e=await peerConnection.createAnswer();await peerConnection.setLocalDescription(e);ws.send(JSON.stringify({answer:e}))}else t.candidate&&peerConnection&&await peerConnection.addIceCandidate(new RTCIceCandidate(t.candidate))};
+    </script>
+</body>
+</html>
