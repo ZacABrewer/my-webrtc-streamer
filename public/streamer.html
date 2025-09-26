@@ -1,43 +1,96 @@
-// server.js
-const express = require('express');
-const http = require('http');
-const WebSocket = require('ws');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Streamer Page</title>
+    <style>
+        body { font-family: sans-serif; background-color: #f0f0f0; text-align: center; }
+        video { border: 2px solid #333; background-color: #000; width: 80%; max-width: 640px; margin-top: 20px; }
+        button { font-size: 1.2em; padding: 10px 20px; margin-top: 15px; cursor: pointer; }
+        #status { margin-top: 10px; font-style: italic; color: #555; }
+    </style>
+</head>
+<body>
+    <h1>Camera Streamer</h1>
+    <p>Your camera feed is shown below. Click "Start Streaming" to send it to viewers.</p>
+    
+    <video id="localVideo" autoplay muted playsinline></video>
+    <br>
+    <button id="startButton">Start Streaming</button>
+    <div id="status">Status: Not connected</div>
 
-const port = process.env.PORT || 8080;
-const app = express();
+    <script>
+        const localVideo = document.getElementById('localVideo');
+        const startButton = document.getElementById('startButton');
+        const statusDiv = document.getElementById('status');
+        
+        let localStream;
+        let peerConnection;
+        
+        // Connect to the signaling server (dynamically using the window's location)
+        const ws = new WebSocket(`wss://${window.location.host}`);
 
-// Serve all static files from the 'public' directory
-app.use(express.static('public'));
+        // Public STUN servers provided by Google.
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
 
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+        ws.onopen = () => {
+            console.log('Connected to signaling server');
+            statusDiv.textContent = 'Status: Connected to server. Ready to stream.';
+        };
 
-console.log("Signaling server starting...");
-
-wss.on('connection', ws => {
-    console.log('Client connected.');
-
-    ws.on('message', message => {
-        // The message is a Buffer, so we convert it to a string.
-        const messageStr = message.toString();
-
-        // Broadcast the message to all clients except the sender
-        wss.clients.forEach(client => {
-            if (client !== ws && client.readyState === WebSocket.OPEN) {
-                client.send(messageStr);
+        ws.onmessage = async event => {
+            const message = JSON.parse(event.data);
+            
+            if (message.answer) {
+                console.log('Received answer from viewer');
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(message.answer));
+            } else if (message.candidate) {
+                console.log('Received ICE candidate from viewer');
+                await peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
             }
-        });
-    });
+        };
 
-    ws.on('close', () => {
-        console.log('Client disconnected.');
-    });
+        startButton.onclick = async () => {
+            // Get user media (camera and microphone)
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                localVideo.srcObject = localStream;
+                startButton.textContent = "Streaming... (Click to Restart)";
+                statusDiv.textContent = 'Status: Streaming...';
+            } catch (error) {
+                alert('Error accessing media devices: ' + error.message);
+                return;
+            }
+            
+            // Create a new Peer Connection
+            peerConnection = new RTCPeerConnection(configuration);
 
-    ws.on('error', error => {
-        console.error('Server error:', error);
-    });
-});
+            // Add local stream tracks to the peer connection
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
 
-server.listen(port, () => {
-    console.log(`Server is listening on port ${port}`);
-});
+            // Handle ICE candidates: send them to the other peer
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    console.log('Sending ICE candidate');
+                    ws.send(JSON.stringify({ candidate: event.candidate }));
+                }
+            };
+            
+            // Create an offer and send it to the signaling server
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            
+            console.log('Sending offer to viewer');
+            ws.send(JSON.stringify({ offer: offer }));
+        };
+    </script>
+</body>
+</html>
